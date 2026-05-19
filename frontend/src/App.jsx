@@ -3,12 +3,23 @@ import axios from "axios";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
+const SESSION_STORAGE_KEY = "facturas_session_id";
+
+function getOrCreateSessionId() {
+  const existing = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (existing) return existing;
+
+  const newSession = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(SESSION_STORAGE_KEY, newSession);
+  return newSession;
+}
 
 function App() {
   const [backendStatus, setBackendStatus] = useState("Comprobando...");
   const [gmailStatus, setGmailStatus] = useState("No conectado");
   const [facturas, setFacturas] = useState([]);
   const [cargando, setCargando] = useState(false);
+  const [sessionId] = useState(() => getOrCreateSessionId());
 
   useEffect(() => {
     comprobarBackend();
@@ -48,7 +59,9 @@ function App() {
 
   const comprobarGmail = () => {
     axios
-      .get(`${API_URL}/gmail/status`)
+      .get(`${API_URL}/gmail/status`, {
+        headers: { "x-session-id": sessionId }
+      })
       .then((response) => {
         if (response.data.connected) {
           setGmailStatus("Gmail conectado");
@@ -62,14 +75,16 @@ function App() {
   };
 
   const conectarGmail = () => {
-    window.location.href = `${API_URL}/auth/google`;
+    window.location.href = `${API_URL}/auth/google?sessionId=${encodeURIComponent(sessionId)}`;
   };
 
   const cargarCorreos = () => {
     setCargando(true);
 
     axios
-      .get(`${API_URL}/gmail/messages`)
+      .get(`${API_URL}/gmail/messages`, {
+        headers: { "x-session-id": sessionId }
+      })
       .then((response) => {
         const mensajes = response.data.messages.map((mensaje) => ({
           id: mensaje.id,
@@ -107,6 +122,46 @@ function App() {
       .finally(() => {
         setCargando(false);
       });
+  };
+
+  const descargarExcel = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/exports/excel`, {
+        headers: { "x-session-id": sessionId },
+        responseType: "blob"
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "facturas_recibos.xlsx");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("No se pudo descargar el Excel.");
+    }
+  };
+
+  const descargarPdfs = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/exports/pdfs`, {
+        headers: { "x-session-id": sessionId },
+        responseType: "blob"
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "Facturas-Recibos.zip");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("No se pudo descargar el ZIP de PDFs.");
+    }
   };
 
   return (
@@ -152,6 +207,14 @@ function App() {
 
           <button onClick={cargarCorreos} disabled={cargando}>
             {cargando ? "Buscando..." : "Buscar PDFs en Gmail"}
+          </button>
+
+          <button onClick={descargarExcel} disabled={facturas.length === 0}>
+            Descargar Excel
+          </button>
+
+          <button onClick={descargarPdfs} disabled={facturas.length === 0}>
+            Descargar PDFs
           </button>
         </div>
       </section>
