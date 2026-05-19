@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./App.css";
 
+const API_URL = import.meta.env.VITE_API_URL || "";
+
 function App() {
   const [backendStatus, setBackendStatus] = useState("Comprobando...");
   const [gmailStatus, setGmailStatus] = useState("No conectado");
@@ -18,7 +20,14 @@ function App() {
 
   const resumen = useMemo(() => {
     const total = facturas.length;
-    const monedas = [...new Set(facturas.map((f) => f.moneda).filter((m) => m && m !== "-"))].join(", ");
+
+    const monedas = [
+      ...new Set(
+        facturas
+          .map((factura) => factura.moneda)
+          .filter((moneda) => moneda && moneda !== "-")
+      )
+    ].join(", ");
 
     return {
       total,
@@ -28,7 +37,7 @@ function App() {
 
   const comprobarBackend = () => {
     axios
-      .get("http://localhost:4000/health")
+      .get(`${API_URL}/health`)
       .then(() => {
         setBackendStatus("Backend conectado");
       })
@@ -39,7 +48,7 @@ function App() {
 
   const comprobarGmail = () => {
     axios
-      .get("http://localhost:4000/gmail/status")
+      .get(`${API_URL}/gmail/status`)
       .then((response) => {
         if (response.data.connected) {
           setGmailStatus("Gmail conectado");
@@ -53,21 +62,30 @@ function App() {
   };
 
   const conectarGmail = () => {
-    window.location.href = "http://localhost:4000/auth/google";
+    window.location.href = `${API_URL}/auth/google`;
   };
 
   const cargarCorreos = () => {
     setCargando(true);
 
     axios
-      .get("http://localhost:4000/gmail/messages")
+      .get(`${API_URL}/gmail/messages`)
       .then((response) => {
         const mensajes = response.data.messages.map((mensaje) => ({
           id: mensaje.id,
           fecha: mensaje.fecha || "-",
           proveedor: mensaje.proveedor || "-",
-          total: mensaje.total || "-",
+          total: mensaje.total ?? "-",
           moneda: mensaje.moneda || "-",
+          impuestos: mensaje.impuestos ?? "-",
+          numeroDocumento: mensaje.numeroDocumento || "-",
+          tipoDocumento: mensaje.tipoDocumento || "-",
+          confianza:
+            typeof mensaje.confianza === "number"
+              ? `${Math.round(mensaje.confianza * 100)}%`
+              : "-",
+          motivo: mensaje.motivo || "-",
+          idioma: mensaje.idioma || "-",
           pdf: mensaje.archivo || "-",
           asunto: mensaje.asunto || "-",
           pdfUrl: mensaje.pdfUrl || ""
@@ -95,21 +113,28 @@ function App() {
     <main className="container">
       <section className="hero card">
         <p className="eyebrow">Gestión inteligente</p>
+
         <h1>Extractor de facturas y recibos</h1>
+
         <p className="hero-description">
-          Conecta Gmail, encuentra automáticamente correos con PDFs y revisa tus facturas en un panel más claro.
+          Conecta Gmail, analiza los PDFs con IA y revisa tus facturas en un
+          panel claro.
         </p>
       </section>
 
       <section className="status-grid">
         <article className="status-card card">
           <h2>Backend</h2>
-          <p className={`badge ${estadoBackendOk ? "ok" : "error"}`}>{backendStatus}</p>
+          <p className={`badge ${estadoBackendOk ? "ok" : "error"}`}>
+            {backendStatus}
+          </p>
         </article>
 
         <article className="status-card card">
           <h2>Gmail</h2>
-          <p className={`badge ${estadoGmailOk ? "ok" : "warning"}`}>{gmailStatus}</p>
+          <p className={`badge ${estadoGmailOk ? "ok" : "warning"}`}>
+            {gmailStatus}
+          </p>
         </article>
 
         <article className="status-card card">
@@ -121,8 +146,10 @@ function App() {
 
       <section className="card">
         <h2>Acciones</h2>
+
         <div className="button-row">
           <button onClick={conectarGmail}>Conectar Gmail</button>
+
           <button onClick={cargarCorreos} disabled={cargando}>
             {cargando ? "Buscando..." : "Buscar PDFs en Gmail"}
           </button>
@@ -136,7 +163,9 @@ function App() {
         </div>
 
         {facturas.length === 0 ? (
-          <p className="empty-state">Aún no hay facturas procesadas. Pulsa en “Buscar PDFs en Gmail”.</p>
+          <p className="empty-state">
+            Aún no hay facturas procesadas. Pulsa en “Buscar PDFs en Gmail”.
+          </p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -144,23 +173,32 @@ function App() {
                 <tr>
                   <th>Fecha</th>
                   <th>Proveedor</th>
+                  <th>Tipo</th>
                   <th>Total</th>
                   <th>Moneda</th>
-                  <th>Asunto</th>
+                  <th>Confianza IA</th>
+                  <th>Motivo</th>
                   <th>PDF</th>
                 </tr>
               </thead>
+
               <tbody>
                 {facturas.map((factura, index) => (
                   <tr key={factura.id || index}>
                     <td>{factura.fecha}</td>
                     <td>{factura.proveedor}</td>
+                    <td>{factura.tipoDocumento}</td>
                     <td>{factura.total}</td>
                     <td>{factura.moneda}</td>
-                    <td>{factura.asunto}</td>
+                    <td>{factura.confianza}</td>
+                    <td>{factura.motivo}</td>
                     <td>
                       {factura.pdfUrl ? (
-                        <a href={factura.pdfUrl} target="_blank" rel="noreferrer">
+                        <a
+                          href={factura.pdfUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           {factura.pdf}
                         </a>
                       ) : (

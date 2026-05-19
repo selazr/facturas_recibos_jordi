@@ -8,16 +8,25 @@ require("dotenv").config();
 
 const app = express();
 
+const PORT = process.env.PORT || 4000;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+
 app.use(cors());
 app.use(express.json());
 
 const downloadsDir = path.join(__dirname, "downloads");
+const frontendDist = path.join(__dirname, "../frontend/dist");
 
 if (!fs.existsSync(downloadsDir)) {
-  fs.mkdirSync(downloadsDir);
+  fs.mkdirSync(downloadsDir, { recursive: true });
 }
 
 app.use("/downloads", express.static(downloadsDir));
+
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+}
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -80,7 +89,6 @@ const patronesFactura = [
   /\brecei?pt\w*/i,
   /\brecib\w*/i,
   /\brechn\w*/i,
-  /\bfactur\w*/i,
   /\brecu\w*/i,
   /\bfattur\w*/i,
   /\bricevut\w*/i,
@@ -150,9 +158,19 @@ function sanitizeFilename(filename) {
 function decodeBase64Url(data = "") {
   if (!data) return "";
 
-  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(
-    "utf-8"
-  );
+  return Buffer.from(
+    data.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  ).toString("utf-8");
+}
+
+function stripHtml(html = "") {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function extractBodyText(payload) {
@@ -170,7 +188,13 @@ function extractBodyText(payload) {
         part.mimeType === "text/plain" || part.mimeType === "text/html";
 
       if (isReadableText && part.body && part.body.data) {
-        content.push(decodeBase64Url(part.body.data));
+        const decoded = decodeBase64Url(part.body.data);
+
+        if (part.mimeType === "text/html") {
+          content.push(stripHtml(decoded));
+        } else {
+          content.push(decoded);
+        }
       }
 
       if (part.parts && Array.isArray(part.parts)) {
@@ -210,8 +234,9 @@ function extractCurrency(text) {
   return "-";
 }
 
-function pareceFactura({ pdfText = "", subject = "", bodyText = "" }) {
-  const contenido = normalizeText(`${subject} ${bodyText} ${pdfText}`);
+function pareceFactura({ pdfText = "", subject = "", bodyText = "", filename = "" }) {
+  const contenido = normalizeText(`${subject} ${bodyText} ${filename} ${pdfText}`);
+
   const tienePalabraClave = palabrasFactura.some((palabra) =>
     contenido.includes(normalizeText(palabra))
   );
@@ -220,13 +245,6 @@ function pareceFactura({ pdfText = "", subject = "", bodyText = "" }) {
 
   return patronesFactura.some((pattern) => pattern.test(contenido));
 }
-
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    message: "Backend facturas/recibos funcionando"
-  });
-});
 
 app.get("/health", (req, res) => {
   res.json({
@@ -259,7 +277,7 @@ app.get("/auth/google/callback", async (req, res) => {
 
     console.log("Gmail conectado correctamente");
 
-    res.redirect(`${process.env.FRONTEND_URL}?gmail=connected`);
+    res.redirect(`${FRONTEND_URL}?gmail=connected`);
   } catch (error) {
     console.error("Error conectando Gmail:", error);
     res.status(500).send("Error conectando Gmail");
@@ -341,7 +359,8 @@ app.get("/gmail/messages", async (req, res) => {
         const esFactura = pareceFactura({
           pdfText,
           subject,
-          bodyText
+          bodyText,
+          filename: pdfPart.filename
         });
 
         if (esFactura) {
@@ -353,7 +372,7 @@ app.get("/gmail/messages", async (req, res) => {
             archivo: pdfPart.filename,
             total: extractTotal(pdfText),
             moneda: extractCurrency(pdfText),
-            pdfUrl: `http://localhost:4000/downloads/${safeFilename}`
+            pdfUrl: `${PUBLIC_URL}/downloads/${safeFilename}`
           });
         }
       }
@@ -371,8 +390,19 @@ app.get("/gmail/messages", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 4000;
+if (fs.existsSync(frontendDist)) {
+  app.get(/.*/, (req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+} else {
+  app.get("/", (req, res) => {
+    res.json({
+      ok: true,
+      message: "Backend facturas/recibos funcionando"
+    });
+  });
+}
 
 app.listen(PORT, () => {
-  console.log(`Backend escuchando en http://localhost:${PORT}`);
+  console.log(`Backend escuchando en puerto ${PORT}`);
 });
