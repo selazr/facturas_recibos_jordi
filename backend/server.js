@@ -2,8 +2,11 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { execFileSync } = require("child_process");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
+const ExcelJS = require("exceljs");
 require("dotenv").config();
 
 const app = express();
@@ -37,6 +40,8 @@ const oauth2Client = new google.auth.OAuth2(
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
 let userTokens = null;
+let activeSessionId = null;
+let cachedFacturas = [];
 
 const palabrasFactura = [
   "factura",
@@ -155,6 +160,33 @@ function sanitizeFilename(filename) {
     .toLowerCase();
 }
 
+function parseDateToMonthKey(rawDate = "") {
+  const parsed = new Date(rawDate);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "sin-fecha";
+  }
+
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const year = parsed.getUTCFullYear();
+
+  return `${year}-${month}`;
+}
+
+function ensureSession(req, res) {
+  const sessionId = req.header("x-session-id") || req.query.sessionId;
+
+  if (!sessionId || !activeSessionId || sessionId !== activeSessionId) {
+    res.status(401).json({
+      error: "Sesión inválida o reemplazada por otro dispositivo"
+    });
+
+    return null;
+  }
+
+  return sessionId;
+}
+
 function decodeBase64Url(data = "") {
   if (!data) return "";
 
@@ -253,10 +285,17 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/auth/google", (req, res) => {
+  const sessionId = req.query.sessionId;
+
+  if (!sessionId) {
+    return res.status(400).send("Falta sessionId");
+  }
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: SCOPES
+    scope: SCOPES,
+    state: sessionId
   });
 
   res.redirect(authUrl);
@@ -271,8 +310,15 @@ app.get("/auth/google/callback", async (req, res) => {
     }
 
     const { tokens } = await oauth2Client.getToken(code);
+    const sessionId = req.query.state;
+
+    if (!sessionId) {
+      return res.status(400).send("Falta state de sesión");
+    }
 
     userTokens = tokens;
+    activeSessionId = sessionId;
+    cachedFacturas = [];
     oauth2Client.setCredentials(tokens);
 
     console.log("Gmail conectado correctamente");
@@ -285,13 +331,19 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 app.get("/gmail/status", (req, res) => {
+  const sessionId = req.header("x-session-id") || req.query.sessionId;
+
   res.json({
-    connected: Boolean(userTokens)
+    connected: Boolean(userTokens) && Boolean(sessionId) && sessionId === activeSessionId
   });
 });
 
 app.get("/gmail/messages", async (req, res) => {
   try {
+    const sessionId = ensureSession(req, res);
+
+    if (!sessionId) return;
+
     if (!userTokens) {
       return res.status(401).json({
         error: "Gmail no conectado"
@@ -372,11 +424,15 @@ app.get("/gmail/messages", async (req, res) => {
             archivo: pdfPart.filename,
             total: extractTotal(pdfText),
             moneda: extractCurrency(pdfText),
+            monthKey: parseDateToMonthKey(date),
+            localPath: filePath,
             pdfUrl: `${PUBLIC_URL}/downloads/${safeFilename}`
           });
         }
       }
     }
+
+    cachedFacturas = facturas;
 
     res.json({
       count: facturas.length,
@@ -387,6 +443,66 @@ app.get("/gmail/messages", async (req, res) => {
     res.status(500).json({
       error: "Error procesando Gmail"
     });
+  }
+});
+
+app.get("/exports/excel", async (req, res) => {
+  const sessionId = ensureSession(req, res);
+
+  if (!sessionId) return;
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Facturas");
+
+  worksheet.columns = [
+    { header: "Fecha", key: "fecha", width: 28 },
+    { header: "Proveedor", key: "proveedor", width: 45 },
+    { header: "Asunto", key: "asunto", width: 45 },
+    { header: "Archivo PDF", key: "archivo", width: 36 },
+    { header: "Total", key: "total", width: 14 },
+    { header: "Moneda", key: "moneda", width: 12 },
+    { header: "Mes", key: "monthKey", width: 12 }
+  ];
+
+  cachedFacturas.forEach((factura) => worksheet.addRow(factura));
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="facturas_recibos.xlsx"');
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
+app.get("/exports/pdfs", (req, res) => {
+  const sessionId = ensureSession(req, res);
+
+  if (!sessionId) return;
+
+  if (!cachedFacturas.length) {
+    return res.status(400).json({ error: "No hay facturas cargadas para exportar" });
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "facturas-recibos-"));
+  const baseDir = path.join(tempRoot, "Facturas-Recibos");
+  fs.mkdirSync(baseDir, { recursive: true });
+
+  cachedFacturas.forEach((factura) => {
+    if (!factura.localPath || !fs.existsSync(factura.localPath)) return;
+    const monthDir = path.join(baseDir, factura.monthKey || "sin-fecha");
+    fs.mkdirSync(monthDir, { recursive: true });
+    const dest = path.join(monthDir, sanitizeFilename(factura.archivo || "documento.pdf"));
+    fs.copyFileSync(factura.localPath, dest);
+  });
+
+  const zipPath = path.join(tempRoot, "Facturas-Recibos.zip");
+
+  try {
+    execFileSync("zip", ["-r", zipPath, "Facturas-Recibos"], { cwd: tempRoot });
+    res.download(zipPath, "Facturas-Recibos.zip", () => {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    });
+  } catch (error) {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+    res.status(500).json({ error: "No se pudo generar el ZIP de PDFs" });
   }
 });
 
