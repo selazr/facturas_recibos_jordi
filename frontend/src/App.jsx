@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./App.css";
 
@@ -12,6 +12,19 @@ function App() {
     comprobarBackend();
     comprobarGmail();
   }, []);
+
+  const estadoBackendOk = backendStatus === "Backend conectado";
+  const estadoGmailOk = gmailStatus === "Gmail conectado";
+
+  const resumen = useMemo(() => {
+    const total = facturas.length;
+    const monedas = [...new Set(facturas.map((f) => f.moneda).filter((m) => m && m !== "-"))].join(", ");
+
+    return {
+      total,
+      monedas: monedas || "Sin moneda detectada"
+    };
+  }, [facturas]);
 
   const comprobarBackend = () => {
     axios
@@ -80,27 +93,36 @@ function App() {
 
   return (
     <main className="container">
-      <h1>Extractor de facturas y recibos</h1>
+      <section className="hero card">
+        <p className="eyebrow">Gestión inteligente</p>
+        <h1>Extractor de facturas y recibos</h1>
+        <p className="hero-description">
+          Conecta Gmail, encuentra automáticamente correos con PDFs y revisa tus facturas en un panel más claro.
+        </p>
+      </section>
 
-      <section className="card">
-        <h2>Estado</h2>
-        <p>{backendStatus}</p>
-        <p>{gmailStatus}</p>
+      <section className="status-grid">
+        <article className="status-card card">
+          <h2>Backend</h2>
+          <p className={`badge ${estadoBackendOk ? "ok" : "error"}`}>{backendStatus}</p>
+        </article>
+
+        <article className="status-card card">
+          <h2>Gmail</h2>
+          <p className={`badge ${estadoGmailOk ? "ok" : "warning"}`}>{gmailStatus}</p>
+        </article>
+
+        <article className="status-card card">
+          <h2>Total de facturas</h2>
+          <p className="metric">{resumen.total}</p>
+          <small>{resumen.monedas}</small>
+        </article>
       </section>
 
       <section className="card">
-        <h2>Gmail</h2>
-
-        <p>
-          Conecta Gmail para buscar correos con PDFs adjuntos, detectar facturas
-          o recibos y extraer los PDFs.
-        </p>
-
+        <h2>Acciones</h2>
         <div className="button-row">
-          <button onClick={conectarGmail}>
-            Conectar Gmail
-          </button>
-
+          <button onClick={conectarGmail}>Conectar Gmail</button>
           <button onClick={cargarCorreos} disabled={cargando}>
             {cargando ? "Buscando..." : "Buscar PDFs en Gmail"}
           </button>
@@ -108,48 +130,48 @@ function App() {
       </section>
 
       <section className="card">
-        <h2>Facturas encontradas</h2>
+        <div className="section-title-row">
+          <h2>Facturas encontradas</h2>
+          <span className="counter">{facturas.length}</span>
+        </div>
 
         {facturas.length === 0 ? (
-          <p>Aún no hay facturas procesadas.</p>
+          <p className="empty-state">Aún no hay facturas procesadas. Pulsa en “Buscar PDFs en Gmail”.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Proveedor</th>
-                <th>Total</th>
-                <th>Moneda</th>
-                <th>Asunto</th>
-                <th>PDF</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {facturas.map((factura, index) => (
-                <tr key={factura.id || index}>
-                  <td>{factura.fecha}</td>
-                  <td>{factura.proveedor}</td>
-                  <td>{factura.total}</td>
-                  <td>{factura.moneda}</td>
-                  <td>{factura.asunto}</td>
-                  <td>
-                    {factura.pdfUrl ? (
-                      <a
-                        href={factura.pdfUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {factura.pdf}
-                      </a>
-                    ) : (
-                      factura.pdf
-                    )}
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Proveedor</th>
+                  <th>Total</th>
+                  <th>Moneda</th>
+                  <th>Asunto</th>
+                  <th>PDF</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {facturas.map((factura, index) => (
+                  <tr key={factura.id || index}>
+                    <td>{factura.fecha}</td>
+                    <td>{factura.proveedor}</td>
+                    <td>{factura.total}</td>
+                    <td>{factura.moneda}</td>
+                    <td>{factura.asunto}</td>
+                    <td>
+                      {factura.pdfUrl ? (
+                        <a href={factura.pdfUrl} target="_blank" rel="noreferrer">
+                          {factura.pdf}
+                        </a>
+                      ) : (
+                        factura.pdf
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </main>
