@@ -31,10 +31,15 @@ let userTokens = null;
 
 const palabrasFactura = [
   "factura",
+  "facturas",
   "invoice",
+  "invoices",
   "receipt",
+  "receipts",
   "recibo",
+  "recibos",
   "bill",
+  "billing",
   "payment",
   "paid",
   "total",
@@ -46,11 +51,61 @@ const palabrasFactura = [
   "rechnung",
   "facture",
   "reçu",
+  "recu",
   "fattura",
+  "fatture",
   "ricevuta",
+  "ricevute",
   "nota fiscal",
-  "pagamento"
+  "pagamento",
+  "pagado",
+  "quittance",
+  "beleg",
+  "zahlung",
+  "zahlungsbeleg",
+  "kunderekening",
+  "betalingsbewijs",
+  "faktura",
+  "faktury",
+  "rachunek",
+  "paragon",
+  "plata",
+  "platare",
+  "apmaksa"
 ];
+
+const patronesFactura = [
+  /\bfactur\w*/i,
+  /\binvoic\w*/i,
+  /\brecei?pt\w*/i,
+  /\brecib\w*/i,
+  /\brechn\w*/i,
+  /\bfactur\w*/i,
+  /\brecu\w*/i,
+  /\bfattur\w*/i,
+  /\bricevut\w*/i,
+  /\bfaktur\w*/i,
+  /\brachun\w*/i,
+  /\bparag\w*/i,
+  /\bquittanc\w*/i,
+  /\bzahlung\w*/i,
+  /\bbetal\w*/i,
+  /\bapmaks\w*/i,
+  /\bnota\s+fiscal\b/i,
+  /\bvat\b/i,
+  /\biva\b/i,
+  /\btax\b/i,
+  /\bamount\s+due\b/i,
+  /\bimporte\s+total\b/i,
+  /\bgrand\s+total\b/i
+];
+
+function normalizeText(text = "") {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
 
 function getHeader(headers, name) {
   const found = headers.find(
@@ -92,6 +147,41 @@ function sanitizeFilename(filename) {
     .toLowerCase();
 }
 
+function decodeBase64Url(data = "") {
+  if (!data) return "";
+
+  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(
+    "utf-8"
+  );
+}
+
+function extractBodyText(payload) {
+  if (!payload) return "";
+
+  const content = [];
+
+  if (payload.body && payload.body.data) {
+    content.push(decodeBase64Url(payload.body.data));
+  }
+
+  if (payload.parts && Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      const isReadableText =
+        part.mimeType === "text/plain" || part.mimeType === "text/html";
+
+      if (isReadableText && part.body && part.body.data) {
+        content.push(decodeBase64Url(part.body.data));
+      }
+
+      if (part.parts && Array.isArray(part.parts)) {
+        content.push(extractBodyText(part));
+      }
+    }
+  }
+
+  return content.join(" ");
+}
+
 function extractTotal(text) {
   const patterns = [
     /total\s*(?:eur|€)?\s*[:\-]?\s*([0-9]+(?:[.,][0-9]{2})?)/i,
@@ -120,10 +210,15 @@ function extractCurrency(text) {
   return "-";
 }
 
-function pareceFactura(text, subject) {
-  const contenido = `${subject} ${text}`.toLowerCase();
+function pareceFactura({ pdfText = "", subject = "", bodyText = "" }) {
+  const contenido = normalizeText(`${subject} ${bodyText} ${pdfText}`);
+  const tienePalabraClave = palabrasFactura.some((palabra) =>
+    contenido.includes(normalizeText(palabra))
+  );
 
-  return palabrasFactura.some((palabra) => contenido.includes(palabra));
+  if (tienePalabraClave) return true;
+
+  return patronesFactura.some((pattern) => pattern.test(contenido));
 }
 
 app.get("/", (req, res) => {
@@ -213,6 +308,7 @@ app.get("/gmail/messages", async (req, res) => {
       const subject = getHeader(headers, "Subject");
       const from = getHeader(headers, "From");
       const date = getHeader(headers, "Date");
+      const bodyText = extractBodyText(detail.data.payload);
 
       const pdfParts = findPdfParts(detail.data.payload);
 
@@ -242,7 +338,11 @@ app.get("/gmail/messages", async (req, res) => {
           console.error("No se pudo leer el PDF:", pdfPart.filename);
         }
 
-        const esFactura = pareceFactura(pdfText, subject);
+        const esFactura = pareceFactura({
+          pdfText,
+          subject,
+          bodyText
+        });
 
         if (esFactura) {
           facturas.push({
