@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 const ExcelJS = require("exceljs");
@@ -173,8 +174,51 @@ function parseDateToMonthKey(rawDate = "") {
   return `${year}-${month}`;
 }
 
+
+function parseCookies(req) {
+  const cookieHeader = req.headers.cookie || "";
+
+  return cookieHeader
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .reduce((acc, pair) => {
+      const separatorIndex = pair.indexOf("=");
+
+      if (separatorIndex === -1) return acc;
+
+      const key = pair.slice(0, separatorIndex).trim();
+      const value = pair.slice(separatorIndex + 1).trim();
+
+      acc[key] = decodeURIComponent(value);
+      return acc;
+    }, {});
+}
+
+function getRequestSessionId(req) {
+  const cookies = parseCookies(req);
+
+  return req.header("x-session-id") || req.query.sessionId || cookies.sessionId || null;
+}
+
+function createSessionId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function persistSessionCookie(res, sessionId) {
+  res.cookie("sessionId", sessionId, {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: false,
+    maxAge: 1000 * 60 * 60 * 24 * 30
+  });
+}
 function ensureSession(req, res) {
-  const sessionId = req.header("x-session-id") || req.query.sessionId;
+  const sessionId = getRequestSessionId(req);
 
   if (!sessionId || !activeSessionId || sessionId !== activeSessionId) {
     res.status(401).json({
@@ -285,11 +329,9 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/auth/google", (req, res) => {
-  const sessionId = req.query.sessionId;
+  const sessionId = getRequestSessionId(req) || createSessionId();
 
-  if (!sessionId) {
-    return res.status(400).send("Falta sessionId");
-  }
+  persistSessionCookie(res, sessionId);
 
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -310,11 +352,13 @@ app.get("/auth/google/callback", async (req, res) => {
     }
 
     const { tokens } = await oauth2Client.getToken(code);
-    const sessionId = req.query.state;
+    const sessionId = req.query.state || getRequestSessionId(req);
 
     if (!sessionId) {
       return res.status(400).send("Falta state de sesión");
     }
+
+    persistSessionCookie(res, sessionId);
 
     userTokens = tokens;
     activeSessionId = sessionId;
@@ -331,7 +375,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 app.get("/gmail/status", (req, res) => {
-  const sessionId = req.header("x-session-id") || req.query.sessionId;
+  const sessionId = getRequestSessionId(req);
 
   res.json({
     connected: Boolean(userTokens) && Boolean(sessionId) && sessionId === activeSessionId
