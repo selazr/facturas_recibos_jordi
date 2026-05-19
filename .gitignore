@@ -1,0 +1,56 @@
+# Dependencias
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Variables de entorno / secretos
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Builds
+dist/
+build/
+frontend/dist/
+backend/dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Archivos generados por la app
+backend/downloads/
+backend/exports/
+
+# PDFs descargados / facturas sensibles
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.zip
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDE / editores
+.vscode/
+.idea/
+
+# Cache
+.cache/
+.parcel-cache/
+.vite/
+
+# Coverage / tests
+coverage/
+
+# Temporales
+tmp/
+temp/
